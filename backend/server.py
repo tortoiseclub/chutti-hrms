@@ -487,6 +487,25 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+@app.on_event("startup")
+async def seed_hr_user():
+    """Seed the default HR user on startup"""
+    hr_email = "ipshita@Tortoise.pro"
+    existing = await db.employees.find_one({"email": hr_email}, {"_id": 0})
+    
+    if not existing:
+        hr_user = Employee(
+            name="Ipshita",
+            email=hr_email,
+            joining_date="2024-01-01",
+            role="hr",
+            carry_forward_el=0.0
+        )
+        await db.employees.insert_one(hr_user.model_dump())
+        logger.info(f"Seeded default HR user: {hr_email}")
+    else:
+        logger.info(f"HR user {hr_email} already exists")
+
 @app.on_event("shutdown")
 async def shutdown_db_client():
     client.close()
