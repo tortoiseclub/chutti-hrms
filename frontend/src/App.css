@@ -1,34 +1,123 @@
-.App-logo {
-    height: 40vmin;
-    pointer-events: none;
+@import url('https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;700&family=Inter:wght@400;500&display=swap');
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
 }
 
-@media (prefers-reduced-motion: no-preference) {
-    .App-logo {
-        animation: App-logo-spin infinite 20s linear;
-    }
+body {
+  font-family: 'Inter', sans-serif;
+  background-color: #f8fafc;
+  color: #0f172a;
 }
 
-.App-header {
-    background-color: #0f0f10;
-    min-height: 100vh;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    font-size: calc(10px + 2vmin);
-    color: white;
+h1, h2, h3, h4, h5, h6 {
+  font-family: 'Outfit', sans-serif;
 }
 
-.App-link {
-    color: #61dafb;
+.App {
+  min-height: 100vh;
 }
 
-@keyframes App-logo-spin {
-    from {
-        transform: rotate(0deg);
-    }
-    to {
-        transform: rotate(360deg);
-    }
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: #f1f5f9;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #94a3b8;
+}
+
+/* Animation utilities */
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.fade-in {
+  animation: fadeIn 0.3s ease-out;
+}
+
+/* Pill button */
+.btn-pill {
+  border-radius: 9999px;
+  padding: 0.625rem 1.5rem;
+  font-weight: 500;
+  transition: all 0.2s;
+}
+
+.btn-pill:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(15, 118, 110, 0.2);
+}
+
+/* Card hover effect */
+.card-hover {
+  transition: box-shadow 0.2s, transform 0.2s;
+}
+
+.card-hover:hover {
+  box-shadow: 0 10px 25px rgba(0, 0, 0, 0.08);
+  transform: translateY(-2px);
+}
+
+/* Leave type colors */
+.leave-ooo {
+  background-color: #fef2f2;
+  border-left: 4px solid #ef4444;
+  color: #991b1b;
+}
+
+.leave-wfh {
+  background-color: #eff6ff;
+  border-left: 4px solid #3b82f6;
+  color: #1e40af;
+}
+
+.leave-holiday {
+  background-color: #fef3c7;
+  border-left: 4px solid #f59e0b;
+  color: #92400e;
+}
+
+/* Badge styles */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.25rem 0.75rem;
+  border-radius: 9999px;
+  font-size: 0.875rem;
+  font-weight: 500;
+}
+
+.badge-ooo {
+  background-color: #fef2f2;
+  color: #991b1b;
+}
+
+.badge-wfh {
+  background-color: #eff6ff;
+  color: #1e40af;
+}
+
+.badge-holiday {
+  background-color: #fef3c7;
+  color: #92400e;
 }
