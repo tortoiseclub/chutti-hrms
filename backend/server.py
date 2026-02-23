@@ -275,8 +275,12 @@ async def send_email_notification(employee_name: str, leave_type: str, start_dat
 
 @api_router.post("/auth/login", response_model=LoginResponse)
 async def login(request: LoginRequest):
-    """Login with email"""
-    employee = await db.employees.find_one({"email": request.email}, {"_id": 0})
+    """Login with email (case-insensitive)"""
+    # Case-insensitive email lookup
+    employee = await db.employees.find_one(
+        {"email": {"$regex": f"^{request.email}$", "$options": "i"}}, 
+        {"_id": 0}
+    )
     if not employee:
         raise HTTPException(status_code=404, detail="Employee not found. Please contact HR.")
     
