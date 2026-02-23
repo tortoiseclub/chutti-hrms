@@ -294,8 +294,11 @@ async def login(request: LoginRequest):
 @api_router.post("/employees", response_model=Employee)
 async def create_employee(employee: EmployeeCreate):
     """Create a new employee (HR only)"""
-    # Check if email already exists
-    existing = await db.employees.find_one({"email": employee.email}, {"_id": 0})
+    # Check if email already exists (case-insensitive)
+    existing = await db.employees.find_one(
+        {"email": {"$regex": f"^{employee.email}$", "$options": "i"}}, 
+        {"_id": 0}
+    )
     if existing:
         raise HTTPException(status_code=400, detail="Employee with this email already exists")
     
