@@ -16,13 +16,17 @@ TEST_PREFIX = "TEST_"
 
 
 class TestAuthentication:
-    """Authentication endpoint tests"""
+    """Authentication endpoint tests (password-based login)"""
+
+    # HR credentials for testing
+    HR_EMAIL = "ipshita@Tortoise.pro"
+    HR_PASSWORD = "TortoiseHR@2024"
 
     def test_login_hr_user_success(self):
-        """Test HR login with valid email"""
+        """Test HR login with valid email and password"""
         response = requests.post(
             f"{API_URL}/auth/login",
-            json={"email": "ipshita@Tortoise.pro"}
+            json={"email": self.HR_EMAIL, "password": self.HR_PASSWORD}
         )
         assert response.status_code == 200
         
@@ -39,7 +43,7 @@ class TestAuthentication:
         """Test login is case-insensitive for email"""
         response = requests.post(
             f"{API_URL}/auth/login",
-            json={"email": "IPSHITA@TORTOISE.PRO"}
+            json={"email": "IPSHITA@TORTOISE.PRO", "password": self.HR_PASSWORD}
         )
         assert response.status_code == 200
         data = response.json()
@@ -50,7 +54,7 @@ class TestAuthentication:
         """Test login fails with unknown email"""
         response = requests.post(
             f"{API_URL}/auth/login",
-            json={"email": "unknown@example.com"}
+            json={"email": "unknown@example.com", "password": "anypassword123"}
         )
         assert response.status_code == 404
         data = response.json()
@@ -61,7 +65,7 @@ class TestAuthentication:
         """Test login fails with invalid email format"""
         response = requests.post(
             f"{API_URL}/auth/login",
-            json={"email": "not-an-email"}
+            json={"email": "not-an-email", "password": "anypassword123"}
         )
         # Should return 422 for validation error
         assert response.status_code == 422

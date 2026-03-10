@@ -2,6 +2,8 @@ import { useState, useEffect } from "react";
 import "@/App.css";
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import Login from "@/pages/Login";
+import ForgotPassword from "@/pages/ForgotPassword";
+import ResetPassword from "@/pages/ResetPassword";
 import Dashboard from "@/pages/Dashboard";
 import Calendar from "@/pages/Calendar";
 import Employees from "@/pages/Employees";
@@ -38,6 +40,18 @@ function App() {
             path="/"
             element={
               user ? <Navigate to="/dashboard" /> : <Login onLogin={handleLogin} />
+            }
+          />
+          <Route
+            path="/forgot-password"
+            element={
+              user ? <Navigate to="/dashboard" /> : <ForgotPassword />
+            }
+          />
+          <Route
+            path="/reset-password"
+            element={
+              user ? <Navigate to="/dashboard" /> : <ResetPassword />
             }
           />
           <Route

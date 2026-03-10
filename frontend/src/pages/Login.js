@@ -1,15 +1,19 @@
 import { useState } from "react";
+import { Link } from "react-router-dom";
 import axios from "axios";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { toast } from "sonner";
+import { Eye, EyeOff } from "lucide-react";
 
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
 const API = `${BACKEND_URL}/api`;
 
 export default function Login({ onLogin }) {
   const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
 
   const handleSubmit = async (e) => {
@@ -17,7 +21,7 @@ export default function Login({ onLogin }) {
     setLoading(true);
 
     try {
-      const response = await axios.post(`${API}/auth/login`, { email });
+      const response = await axios.post(`${API}/auth/login`, { email, password });
       toast.success("Login successful!");
       onLogin(response.data);
     } catch (error) {
@@ -43,7 +47,7 @@ export default function Login({ onLogin }) {
             <p className="text-slate-600 mt-2">Sign in to TortoiseHR</p>
           </div>
 
-          <form onSubmit={handleSubmit} className="space-y-6">
+          <form onSubmit={handleSubmit} className="space-y-5">
             <div className="space-y-2">
               <Label htmlFor="email" className="text-slate-700">
                 Work Email
@@ -58,6 +62,45 @@ export default function Login({ onLogin }) {
                 required
                 className="bg-slate-50 focus:bg-white h-12 border-slate-200"
               />
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="password" className="text-slate-700">
+                Password
+              </Label>
+              <div className="relative">
+                <Input
+                  id="password"
+                  data-testid="login-password-input"
+                  type={showPassword ? "text" : "password"}
+                  placeholder="Enter your password"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  required
+                  className="bg-slate-50 focus:bg-white h-12 border-slate-200 pr-12"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword(!showPassword)}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
+                >
+                  {showPassword ? (
+                    <EyeOff className="w-5 h-5" />
+                  ) : (
+                    <Eye className="w-5 h-5" />
+                  )}
+                </button>
+              </div>
+            </div>
+
+            <div className="flex justify-end">
+              <Link
+                to="/forgot-password"
+                className="text-sm text-primary hover:text-primary/80 hover:underline"
+                data-testid="forgot-password-link"
+              >
+                Forgot password?
+              </Link>
             </div>
 
             <Button
