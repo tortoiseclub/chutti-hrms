@@ -44,15 +44,11 @@ function App() {
           />
           <Route
             path="/forgot-password"
-            element={
-              user ? <Navigate to="/dashboard" /> : <ForgotPassword />
-            }
+            element={<ForgotPassword />}
           />
           <Route
             path="/reset-password"
-            element={
-              user ? <Navigate to="/dashboard" /> : <ResetPassword />
-            }
+            element={<ResetPassword />}
           />
           <Route
             path="/dashboard"
