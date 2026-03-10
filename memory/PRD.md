@@ -5,9 +5,12 @@ Build an attendance management app where employees can apply for leaves (Out of 
 
 ## Core Requirements
 
-### Authentication
-- Email-only login (no password/OTP required)
-- Pre-seeded HR user: `ipshita@Tortoise.pro`
+### Authentication (Updated)
+- **Password-protected login** for both HR and employees
+- HR creates employee → **auto-generated password sent via email**
+- **Forgot password** → email link with reset token (1 hour expiry)
+- **Password reset** via token in URL
+- Secure password hashing with bcrypt
 - Case-insensitive email matching
 
 ### Leave Policy
@@ -29,32 +32,41 @@ Build an attendance management app where employees can apply for leaves (Out of 
 - **Backend**: FastAPI + MongoDB
 - **Frontend**: React + TailwindCSS + shadcn/ui
 - **Database**: MongoDB
+- **Email**: SendGrid (LIVE integration)
 
 ## What's Implemented
 
 ### Backend (`/app/backend/server.py`)
-- [x] Email-only authentication with case-insensitive matching
-- [x] Pre-seeded HR user on startup
+- [x] Password-protected authentication (bcrypt hashing)
+- [x] Auto-generated passwords for new employees
+- [x] Forgot password with email reset link
+- [x] Password reset with token validation (1hr expiry)
+- [x] Case-insensitive email lookup
+- [x] SendGrid email integration (LIVE)
 - [x] Employee CRUD operations
-- [x] Leave balance calculation (prorated by joining date)
+- [x] Leave balance calculation
 - [x] Leave application with balance validation
 - [x] OOO deduction logic (CL first, then EL)
 - [x] Holiday management
-- [x] Calendar API with leave and holiday events
+- [x] Calendar API
 
 ### Frontend
-- [x] Login page with Tortoise branding
-- [x] Dashboard with leave balances and team overview
+- [x] Login page with email + password
+- [x] Forgot password page
+- [x] Reset password page (with token)
+- [x] Dashboard with leave balances
 - [x] Leave application dialog
 - [x] Employee management (HR only)
 - [x] Holiday management (HR only)
 - [x] Calendar view
-- [x] Role-based navigation
 
 ### API Endpoints
 | Endpoint | Method | Description |
 |----------|--------|-------------|
-| `/api/auth/login` | POST | Email-only login |
+| `/api/auth/login` | POST | Login with email + password |
+| `/api/auth/forgot-password` | POST | Request password reset email |
+| `/api/auth/reset-password` | POST | Reset password with token |
+| `/api/auth/verify-reset-token` | GET | Validate reset token |
 | `/api/employees` | GET/POST | List/Create employees |
 | `/api/employees/{id}/balance` | GET | Get leave balance |
 | `/api/balances` | GET | All employees' balances |
@@ -65,19 +77,19 @@ Build an attendance management app where employees can apply for leaves (Out of 
 | `/api/calendar` | GET | Calendar events |
 
 ## Test Coverage
-- **Backend**: 27/27 tests passed (100%)
-- **Frontend**: 5/5 UI flows passed (100%)
-- Test file: `/app/backend/tests/test_attendance_api.py`
-
-## Mocked/Deferred Features
-- **Email notifications**: Logged only (Resend API key not configured)
+- **Iteration 1**: Backend 27/27, Frontend 5/5 (basic features)
+- **Iteration 2**: Backend 42/42, Frontend all flows passed (+ auth)
 
 ## Credentials
-- **HR Login**: `ipshita@Tortoise.pro`
+- **HR Login**: `ipshita@Tortoise.pro` / `TortoiseHR@2024`
+
+## Email Integration
+- **Provider**: SendGrid (LIVE)
+- **Status**: Working (emails sent with status 202)
+- **Emails sent**: Welcome emails, password reset emails, leave notifications
 
 ## Upcoming Tasks (P0-P1)
 - [ ] Year-end EL carry forward script (capped at 50%)
-- [ ] Email notification integration (when credentials provided)
 - [ ] HR can add leaves on behalf of employees
 - [ ] Employee delete/deactivate functionality
 
@@ -85,16 +97,18 @@ Build an attendance management app where employees can apply for leaves (Out of 
 - [ ] Leave approval workflow (if required)
 - [ ] Reports and analytics
 - [ ] Export functionality (CSV/Excel)
+- [ ] Change password from profile
 
 ## Architecture
 ```
 /app
 ├── backend/
-│   ├── .env              # MONGO_URL, DB_NAME, RESEND_API_KEY
+│   ├── .env              # MONGO_URL, DB_NAME, SENDGRID_API_KEY, SENDER_EMAIL, FRONTEND_URL
 │   ├── requirements.txt
 │   ├── server.py         # All API routes and business logic
 │   └── tests/
-│       └── test_attendance_api.py
+│       ├── test_attendance_api.py
+│       └── test_auth_password.py
 └── frontend/
     ├── public/
     ├── src/
@@ -103,6 +117,8 @@ Build an attendance management app where employees can apply for leaves (Out of 
     │   │   └── ui/       # shadcn components
     │   ├── pages/
     │   │   ├── Login.js
+    │   │   ├── ForgotPassword.js
+    │   │   ├── ResetPassword.js
     │   │   ├── Dashboard.js
     │   │   ├── Calendar.js
     │   │   ├── Employees.js
@@ -112,5 +128,5 @@ Build an attendance management app where employees can apply for leaves (Out of 
 ```
 
 ## Last Updated
-- Date: 2026-02-23
-- Status: MVP Complete, Testing Passed
+- Date: 2026-03-10
+- Status: Password Authentication Complete, SendGrid LIVE
