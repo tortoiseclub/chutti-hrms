@@ -49,7 +49,12 @@ export default function Dashboard({ user, onLogout }) {
     try {
       const [balanceRes, allBalancesRes, leavesRes] = await Promise.all([
         axios.get(`${API}/employees/${user.employee_id}/balance`),
-        axios.get(`${API}/balances`),
+        axios.get(`${API}/balances`, {
+          headers: {
+            'X-Employee-Id': user.employee_id,
+            'X-Employee-Role': user.role
+          }
+        }),
         axios.get(`${API}/leaves?year=${new Date().getFullYear()}`),
       ]);
 
@@ -331,52 +336,54 @@ export default function Dashboard({ user, onLogout }) {
           )}
         </Card>
 
-        {/* Team Leave Balances */}
-        <Card className="p-6 border border-slate-200 shadow-sm bg-white rounded-xl">
-          <h2 className="text-xl font-bold text-slate-900 mb-4">Team Leave Balances</h2>
-          <div className="overflow-x-auto">
-            <table className="w-full" data-testid="team-balances-table">
-              <thead>
-                <tr className="border-b border-slate-200">
-                  <th className="text-left py-3 px-4 text-sm font-medium text-slate-700">
-                    Employee
-                  </th>
-                  <th className="text-left py-3 px-4 text-sm font-medium text-slate-700">
-                    Earned Leave
-                  </th>
-                  <th className="text-left py-3 px-4 text-sm font-medium text-slate-700">
-                    Casual Leave
-                  </th>
-                  <th className="text-left py-3 px-4 text-sm font-medium text-slate-700">
-                    WFH
-                  </th>
-                </tr>
-              </thead>
-              <tbody>
-                {allBalances.map((bal) => (
-                  <tr
-                    key={bal.employee_id}
-                    data-testid={`balance-row-${bal.employee_id}`}
-                    className="border-b border-slate-100 hover:bg-slate-50"
-                  >
-                    <td className="py-3 px-4 text-sm font-medium text-slate-900">
-                      {bal.employee_name}
-                    </td>
-                    <td className="py-3 px-4 text-sm text-slate-700">
-                      {bal.earned_leave.available} / {bal.earned_leave.total}
-                    </td>
-                    <td className="py-3 px-4 text-sm text-slate-700">
-                      {bal.casual_leave.available} / {bal.casual_leave.total}
-                    </td>
-                    <td className="py-3 px-4 text-sm text-slate-700">
-                      {bal.wfh.available} / {bal.wfh.total}
-                    </td>
+        {/* Team Leave Balances - Only visible to HR */}
+        {user.role === "hr" && (
+          <Card className="p-6 border border-slate-200 shadow-sm bg-white rounded-xl">
+            <h2 className="text-xl font-bold text-slate-900 mb-4">Team Leave Balances</h2>
+            <div className="overflow-x-auto">
+              <table className="w-full" data-testid="team-balances-table">
+                <thead>
+                  <tr className="border-b border-slate-200">
+                    <th className="text-left py-3 px-4 text-sm font-medium text-slate-700">
+                      Employee
+                    </th>
+                    <th className="text-left py-3 px-4 text-sm font-medium text-slate-700">
+                      Earned Leave
+                    </th>
+                    <th className="text-left py-3 px-4 text-sm font-medium text-slate-700">
+                      Casual Leave
+                    </th>
+                    <th className="text-left py-3 px-4 text-sm font-medium text-slate-700">
+                      WFH
+                    </th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </Card>
+                </thead>
+                <tbody>
+                  {allBalances.map((bal) => (
+                    <tr
+                      key={bal.employee_id}
+                      data-testid={`balance-row-${bal.employee_id}`}
+                      className="border-b border-slate-100 hover:bg-slate-50"
+                    >
+                      <td className="py-3 px-4 text-sm font-medium text-slate-900">
+                        {bal.employee_name}
+                      </td>
+                      <td className="py-3 px-4 text-sm text-slate-700">
+                        {bal.earned_leave.available} / {bal.earned_leave.total}
+                      </td>
+                      <td className="py-3 px-4 text-sm text-slate-700">
+                        {bal.casual_leave.available} / {bal.casual_leave.total}
+                      </td>
+                      <td className="py-3 px-4 text-sm text-slate-700">
+                        {bal.wfh.available} / {bal.wfh.total}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </Card>
+        )}
       </div>
     </Layout>
   );

@@ -1,4 +1,4 @@
-from fastapi import FastAPI, APIRouter, HTTPException, Depends
+from fastapi import FastAPI, APIRouter, HTTPException, Depends, Header
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
@@ -14,6 +14,8 @@ import string
 import bcrypt
 from sendgrid import SendGridAPIClient
 from sendgrid.helpers.mail import Mail
+from google.oauth2 import service_account
+from googleapiclient.discovery import build
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
@@ -27,6 +29,11 @@ db = client[os.environ['DB_NAME']]
 SENDGRID_API_KEY = os.environ.get('SENDGRID_API_KEY', '')
 SENDER_EMAIL = os.environ.get('SENDER_EMAIL', '')
 FRONTEND_URL = os.environ.get('FRONTEND_URL', 'http://localhost:3000')
+
+# Google Calendar setup
+GOOGLE_CALENDAR_CREDENTIALS_FILE = ROOT_DIR / 'google_calendar_credentials.json'
+HR_EMAIL = "ipshita@tortoise.pro"  # Guest for all calendar events
+GOOGLE_CALENDAR_ENABLED = GOOGLE_CALENDAR_CREDENTIALS_FILE.exists()
 
 # Create the main app without a prefix
 app = FastAPI()
@@ -146,6 +153,8 @@ def send_email(to_email: str, subject: str, html_content: str) -> bool:
         logger.info(f"SUBJECT: {subject}")
         logger.info(f"CONTENT: {html_content[:200]}...")
         return True
+
+
     
     try:
         message = Mail(
@@ -301,6 +310,82 @@ def send_leave_notification_email(hr_emails: List[str], employee_name: str, leav
         if not send_email(hr_email, subject, html_content):
             success = False
     return success
+
+# ==================== GOOGLE CALENDAR UTILITIES ====================
+
+def get_calendar_service():
+    """Get Google Calendar service using service account with delegation"""
+    if not GOOGLE_CALENDAR_ENABLED:
+        logger.warning("Google Calendar credentials not found")
+        return None
+    
+    try:
+        credentials = service_account.Credentials.from_service_account_file(
+            str(GOOGLE_CALENDAR_CREDENTIALS_FILE),
+            scopes=['https://www.googleapis.com/auth/calendar']
+        )
+        # Delegate to HR user's calendar
+        delegated_credentials = credentials.with_subject(HR_EMAIL)
+        service = build('calendar', 'v3', credentials=delegated_credentials)
+        return service
+    except Exception as e:
+        logger.error(f"Failed to create Google Calendar service: {str(e)}")
+        return None
+
+def create_calendar_event(summary: str, start_date: str, end_date: str, description: str = "", attendee_email: str = HR_EMAIL) -> Optional[str]:
+    """Create a Google Calendar event on HR's calendar"""
+    service = get_calendar_service()
+    if not service:
+        logger.warning("Google Calendar service not available, skipping event creation")
+        return None
+    
+    try:
+        # Parse dates
+        start = datetime.strptime(start_date, "%Y-%m-%d")
+        end = datetime.strptime(end_date, "%Y-%m-%d")
+        # For all-day events, end date should be the next day
+        end_plus_one = end + timedelta(days=1)
+        
+        event = {
+            'summary': summary,
+            'description': description,
+            'start': {
+                'date': start.strftime("%Y-%m-%d"),
+                'timeZone': 'Asia/Kolkata',
+            },
+            'end': {
+                'date': end_plus_one.strftime("%Y-%m-%d"),
+                'timeZone': 'Asia/Kolkata',
+            },
+            'reminders': {
+                'useDefault': True,
+            },
+        }
+        
+        created_event = service.events().insert(
+            calendarId='primary',
+            body=event
+        ).execute()
+        
+        logger.info(f"Google Calendar event created: {created_event.get('id')} - {summary}")
+        return created_event.get('id')
+    except Exception as e:
+        logger.error(f"Failed to create Google Calendar event: {str(e)}")
+        return None
+
+def delete_calendar_event(event_id: str) -> bool:
+    """Delete a Google Calendar event"""
+    service = get_calendar_service()
+    if not service or not event_id:
+        return False
+    
+    try:
+        service.events().delete(calendarId='primary', eventId=event_id).execute()
+        logger.info(f"Google Calendar event deleted: {event_id}")
+        return True
+    except Exception as e:
+        logger.error(f"Failed to delete Google Calendar event: {str(e)}")
+        return False
 
 # ==================== HELPER FUNCTIONS ====================
 
@@ -555,11 +640,23 @@ async def get_employee_balance(employee_id: str, year: Optional[int] = None):
     return balance
 
 @api_router.get("/balances", response_model=List[LeaveBalance])
-async def get_all_balances(year: Optional[int] = None):
-    """Get leave balances for all employees"""
+async def get_all_balances(
+    year: Optional[int] = None,
+    requester_id: Optional[str] = Header(None, alias="X-Employee-Id"),
+    requester_role: Optional[str] = Header(None, alias="X-Employee-Role")
+):
+    """Get leave balances - HR sees all, employees see only their own"""
     if year is None:
         year = datetime.now(timezone.utc).year
     
+    # If requester is an employee (not HR), only return their balance
+    if requester_role and requester_role != "hr" and requester_id:
+        balance = await calculate_leave_balance(requester_id, year)
+        if balance:
+            return [balance]
+        return []
+    
+    # HR or no role specified - return all balances
     employees = await db.employees.find({}, {"_id": 0}).to_list(1000)
     balances = []
     
@@ -606,6 +703,25 @@ async def apply_leave(leave_request: LeaveRequest):
     )
     
     doc = leave.model_dump()
+    
+    # Create Google Calendar event
+    leave_type_display = "OOO" if leave_request.leave_type == "ooo" else "WFH"
+    calendar_summary = f"{leave_type_display} - {employee['name']}"
+    calendar_description = f"Leave type: {leave_type_display}\nEmployee: {employee['name']}\nDays: {days}"
+    if leave_request.reason:
+        calendar_description += f"\nReason: {leave_request.reason}"
+    
+    calendar_event_id = create_calendar_event(
+        summary=calendar_summary,
+        start_date=leave_request.start_date,
+        end_date=leave_request.end_date,
+        description=calendar_description,
+        attendee_email=HR_EMAIL
+    )
+    
+    if calendar_event_id:
+        doc["google_calendar_event_id"] = calendar_event_id
+    
     await db.leaves.insert_one(doc)
     
     # Send email notification to HR
@@ -635,19 +751,41 @@ async def get_leaves(year: Optional[int] = None):
 
 @api_router.delete("/leaves/{leave_id}")
 async def delete_leave(leave_id: str):
-    """Delete/cancel a leave"""
-    result = await db.leaves.delete_one({"leave_id": leave_id})
-    if result.deleted_count == 0:
+    """Delete/cancel a leave and remove Google Calendar event"""
+    # First get the leave to check for calendar event
+    leave = await db.leaves.find_one({"leave_id": leave_id}, {"_id": 0})
+    if not leave:
         raise HTTPException(status_code=404, detail="Leave not found")
+    
+    # Delete Google Calendar event if exists
+    if leave.get("google_calendar_event_id"):
+        delete_calendar_event(leave["google_calendar_event_id"])
+    
+    result = await db.leaves.delete_one({"leave_id": leave_id})
     return {"message": "Leave deleted successfully"}
 
 # ==================== HOLIDAY API ROUTES ====================
 
 @api_router.post("/holidays", response_model=Holiday)
 async def create_holiday(holiday: HolidayCreate):
-    """Add a holiday"""
+    """Add a holiday and create Google Calendar event"""
     holiday_obj = Holiday(**holiday.model_dump())
     doc = holiday_obj.model_dump()
+    
+    # Create Google Calendar event for holiday
+    calendar_summary = f"Holiday - {holiday.name}"
+    calendar_description = f"National Holiday: {holiday.name}"
+    
+    calendar_event_id = create_calendar_event(
+        summary=calendar_summary,
+        start_date=holiday.date,
+        end_date=holiday.date,
+        description=calendar_description,
+        attendee_email=HR_EMAIL
+    )
+    
+    if calendar_event_id:
+        doc["google_calendar_event_id"] = calendar_event_id
     
     await db.holidays.insert_one(doc)
     return holiday_obj
@@ -664,10 +802,17 @@ async def get_holidays(year: Optional[int] = None):
 
 @api_router.delete("/holidays/{holiday_id}")
 async def delete_holiday(holiday_id: str):
-    """Delete a holiday"""
-    result = await db.holidays.delete_one({"holiday_id": holiday_id})
-    if result.deleted_count == 0:
+    """Delete a holiday and remove Google Calendar event"""
+    # First get the holiday to check for calendar event
+    holiday = await db.holidays.find_one({"holiday_id": holiday_id}, {"_id": 0})
+    if not holiday:
         raise HTTPException(status_code=404, detail="Holiday not found")
+    
+    # Delete Google Calendar event if exists
+    if holiday.get("google_calendar_event_id"):
+        delete_calendar_event(holiday["google_calendar_event_id"])
+    
+    result = await db.holidays.delete_one({"holiday_id": holiday_id})
     return {"message": "Holiday deleted successfully"}
 
 # ==================== CALENDAR API ROUTES ====================
