@@ -78,3 +78,7 @@ agenthub/agents/youtube/db
 
 # Mobile development
 android-sdk/ 
+# Local env (never commit secrets)
+.env
+backend/.env
+frontend/.env

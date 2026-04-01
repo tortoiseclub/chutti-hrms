@@ -2,6 +2,8 @@ from fastapi import FastAPI, APIRouter, HTTPException, Depends, Header
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
+import base64
+import json
 import os
 import logging
 from pathlib import Path
@@ -30,10 +32,8 @@ SENDGRID_API_KEY = os.environ.get('SENDGRID_API_KEY', '')
 SENDER_EMAIL = os.environ.get('SENDER_EMAIL', '')
 FRONTEND_URL = os.environ.get('FRONTEND_URL', 'http://localhost:3000')
 
-# Google Calendar setup
+# Google Calendar: local `google_calendar_credentials.json` or env (see below)
 GOOGLE_CALENDAR_CREDENTIALS_FILE = ROOT_DIR / 'google_calendar_credentials.json'
-HR_EMAIL = "ipshita@tortoise.pro"  # Guest for all calendar events
-GOOGLE_CALENDAR_ENABLED = GOOGLE_CALENDAR_CREDENTIALS_FILE.exists()
 
 # Create the main app without a prefix
 app = FastAPI()
@@ -47,6 +47,32 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
+
+HR_EMAIL = os.environ.get('HR_CALENDAR_DELEGATE_EMAIL', 'ipshita@tortoise.pro')
+
+
+def _load_google_service_account_credentials():
+    scopes = ['https://www.googleapis.com/auth/calendar']
+    try:
+        if GOOGLE_CALENDAR_CREDENTIALS_FILE.exists():
+            return service_account.Credentials.from_service_account_file(
+                str(GOOGLE_CALENDAR_CREDENTIALS_FILE),
+                scopes=scopes,
+            )
+        raw_b64 = os.environ.get('GOOGLE_CALENDAR_CREDENTIALS_JSON_B64', '').strip()
+        if raw_b64:
+            info = json.loads(base64.b64decode(raw_b64).decode('utf-8'))
+            return service_account.Credentials.from_service_account_info(info, scopes=scopes)
+        raw_json = os.environ.get('GOOGLE_CALENDAR_CREDENTIALS_JSON', '').strip()
+        if raw_json:
+            info = json.loads(raw_json)
+            return service_account.Credentials.from_service_account_info(info, scopes=scopes)
+    except Exception as e:
+        logger.error('Failed to load Google Calendar credentials: %s', e)
+    return None
+
+
+_GOOGLE_CALENDAR_CREDENTIALS = _load_google_service_account_credentials()
 
 # ==================== MODELS ====================
 
@@ -315,17 +341,12 @@ def send_leave_notification_email(hr_emails: List[str], employee_name: str, leav
 
 def get_calendar_service():
     """Get Google Calendar service using service account with delegation"""
-    if not GOOGLE_CALENDAR_ENABLED:
+    if not _GOOGLE_CALENDAR_CREDENTIALS:
         logger.warning("Google Calendar credentials not found")
         return None
-    
+
     try:
-        credentials = service_account.Credentials.from_service_account_file(
-            str(GOOGLE_CALENDAR_CREDENTIALS_FILE),
-            scopes=['https://www.googleapis.com/auth/calendar']
-        )
-        # Delegate to HR user's calendar
-        delegated_credentials = credentials.with_subject(HR_EMAIL)
+        delegated_credentials = _GOOGLE_CALENDAR_CREDENTIALS.with_subject(HR_EMAIL)
         service = build('calendar', 'v3', credentials=delegated_credentials)
         return service
     except Exception as e:
@@ -475,6 +496,11 @@ async def calculate_leave_balance(employee_id: str, year: int = None):
     }
 
 # ==================== AUTH API ROUTES ====================
+
+@api_router.get("/health")
+async def api_health():
+    return {"status": "ok"}
+
 
 @api_router.post("/auth/login", response_model=LoginResponse)
 async def login(request: LoginRequest):
