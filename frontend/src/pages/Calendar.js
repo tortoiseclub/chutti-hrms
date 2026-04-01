@@ -19,6 +19,8 @@ export default function Calendar({ user, onLogout }) {
   const [events, setEvents] = useState([]);
   const [loading, setLoading] = useState(true);
 
+  // testing
+
   const fetchCalendarData = useCallback(async () => {
     try {
       const year = currentDate.getFullYear();
