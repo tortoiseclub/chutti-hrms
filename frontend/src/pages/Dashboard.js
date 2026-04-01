@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import axios from "axios";
 import Layout from "@/components/Layout";
 import { Button } from "@/components/ui/button";
@@ -41,11 +41,7 @@ export default function Dashboard({ user, onLogout }) {
     reason: "",
   });
 
-  useEffect(() => {
-    fetchData();
-  }, []);
-
-  const fetchData = async () => {
+  const fetchData = useCallback(async () => {
     try {
       const [balanceRes, allBalancesRes, leavesRes] = await Promise.all([
         axios.get(`${API}/employees/${user.employee_id}/balance`),
@@ -66,7 +62,11 @@ export default function Dashboard({ user, onLogout }) {
     } finally {
       setLoading(false);
     }
-  };
+  }, [user.employee_id, user.role]);
+
+  useEffect(() => {
+    fetchData();
+  }, [fetchData]);
 
   const handleApplyLeave = async (e) => {
     e.preventDefault();

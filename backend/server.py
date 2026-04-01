@@ -22,10 +22,15 @@ from googleapiclient.discovery import build
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
 
-# MongoDB connection
-mongo_url = os.environ['MONGO_URL']
-client = AsyncIOMotorClient(mongo_url)
-db = client[os.environ['DB_NAME']]
+# MongoDB connection (optional at import so tooling can load the module without env)
+_mongo_url = os.environ.get('MONGO_URL', '').strip()
+_db_name = (os.environ.get('DB_NAME') or 'chutti').strip()
+if _mongo_url:
+    client = AsyncIOMotorClient(_mongo_url)
+    db = client[_db_name]
+else:
+    client = None
+    db = None
 
 # SendGrid setup
 SENDGRID_API_KEY = os.environ.get('SENDGRID_API_KEY', '')
@@ -898,6 +903,9 @@ app.add_middleware(
 @app.on_event("startup")
 async def seed_hr_user():
     """Seed the default HR user on startup"""
+    if db is None:
+        logger.warning("MONGO_URL not set; skipping HR seed")
+        return
     hr_email = "ipshita@Tortoise.pro"
     existing = await db.employees.find_one(
         {"email": {"$regex": f"^{hr_email}$", "$options": "i"}}, 
@@ -936,4 +944,5 @@ async def seed_hr_user():
 
 @app.on_event("shutdown")
 async def shutdown_db_client():
-    client.close()
+    if client is not None:
+        client.close()

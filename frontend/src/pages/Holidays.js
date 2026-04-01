@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import axios from "axios";
 import Layout from "@/components/Layout";
 import { Button } from "@/components/ui/button";
@@ -30,11 +30,7 @@ export default function Holidays({ user, onLogout }) {
     year: new Date().getFullYear(),
   });
 
-  useEffect(() => {
-    fetchHolidays();
-  }, [selectedYear]);
-
-  const fetchHolidays = async () => {
+  const fetchHolidays = useCallback(async () => {
     try {
       const response = await axios.get(`${API}/holidays?year=${selectedYear}`);
       setHolidays(response.data.sort((a, b) => a.date.localeCompare(b.date)));
@@ -43,7 +39,11 @@ export default function Holidays({ user, onLogout }) {
     } finally {
       setLoading(false);
     }
-  };
+  }, [selectedYear]);
+
+  useEffect(() => {
+    fetchHolidays();
+  }, [fetchHolidays]);
 
   const handleAddHoliday = async (e) => {
     e.preventDefault();

@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import axios from "axios";
 import Layout from "@/components/Layout";
 import { Card } from "@/components/ui/card";
@@ -19,11 +19,7 @@ export default function Calendar({ user, onLogout }) {
   const [events, setEvents] = useState([]);
   const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
-    fetchCalendarData();
-  }, [currentDate]);
-
-  const fetchCalendarData = async () => {
+  const fetchCalendarData = useCallback(async () => {
     try {
       const year = currentDate.getFullYear();
       const month = currentDate.getMonth() + 1;
@@ -37,7 +33,11 @@ export default function Calendar({ user, onLogout }) {
     } finally {
       setLoading(false);
     }
-  };
+  }, [currentDate]);
+
+  useEffect(() => {
+    fetchCalendarData();
+  }, [fetchCalendarData]);
 
   const handleDeleteLeave = async (leaveId) => {
     if (!window.confirm("Are you sure you want to remove this leave?")) {
