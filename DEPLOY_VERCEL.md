@@ -57,6 +57,41 @@ Use **two Vercel projects** from the same Git repository: one for the API, one f
 
 Attach domains to each project in Vercel, then update `REACT_APP_BACKEND_URL`, `FRONTEND_URL`, and `CORS_ORIGINS`, and redeploy both.
 
+## 5. Google Calendar (Google Workspace) checklist
+
+Leave and holiday flows create events on the **delegated user’s primary calendar** (`HR_CALENDAR_DELEGATE_EMAIL`) using a **service account** and **domain-wide delegation**. All of the following must be true or Calendar calls return 403 and only show up in server logs.
+
+### Google Cloud (project that owns the service account)
+
+1. Enable **Google Calendar API**: APIs & Services → Library → “Google Calendar API” → Enable.
+2. Create a **service account** (IAM → Service Accounts), then **Keys** → Add key → JSON. That file is what you base64 for Vercel (`GOOGLE_CALENDAR_CREDENTIALS_JSON_B64`) or place as `backend/google_calendar_credentials.json` locally.
+3. Copy the service account’s **numeric Client ID** (not the email) from the service account details page — you need it for Admin Console.
+
+### Google Admin Console (workspace admin)
+
+1. **Security** → **Access and data control** → **API controls** → **Domain-wide delegation** → **Manage domain-wide delegation** → **Add new**.
+2. Enter the service account **Client ID**.
+3. OAuth scopes (comma-separated, exact):
+
+   `https://www.googleapis.com/auth/calendar`
+
+4. Save. Propagation can take a few minutes.
+
+### App environment variables
+
+| Variable | Purpose |
+|----------|---------|
+| `GOOGLE_CALENDAR_CREDENTIALS_JSON_B64` | **Recommended on Vercel**: base64-encode the entire JSON key file (`base64 -i key.json \| tr -d '\n'`) and paste the string. Avoids broken escaping from multiline JSON. |
+| `GOOGLE_CALENDAR_CREDENTIALS_JSON` | Alternative: single-line JSON (fragile in dashboards). |
+| `HR_CALENDAR_DELEGATE_EMAIL` | A **real Workspace user** in your domain (e.g. `hr@yourdomain.com`) whose **primary** calendar receives events. Must match the domain where delegation was granted. |
+
+Local dev: put the JSON next to `server.py` as `google_calendar_credentials.json` (gitignored via `*credentials*` patterns).
+
+### Verify after deploy
+
+- `GET /api/health` includes a `calendar` object: `credentials_loaded`, and after startup `reachable` + `probe_detail` from a lightweight `calendarList` probe.
+- If `reachable` is false, check Vercel logs for `Google Calendar` lines (HTTP status and error body).
+
 ## Fixes already in this repo
 
 - **Frontend:** Vercel sets `CI=true`, so ESLint warnings fail the CRA build. `react-hooks/exhaustive-deps` issues in Calendar / Dashboard / Holidays were fixed with `useCallback`.

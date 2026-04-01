@@ -2,13 +2,14 @@ from fastapi import FastAPI, APIRouter, HTTPException, Depends, Header
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
+import asyncio
 import base64
 import json
 import os
 import logging
 from pathlib import Path
 from pydantic import BaseModel, Field, ConfigDict, EmailStr
-from typing import List, Optional
+from typing import List, Optional, Tuple
 import uuid
 from datetime import datetime, timezone, date, timedelta
 import secrets
@@ -18,6 +19,7 @@ from sendgrid import SendGridAPIClient
 from sendgrid.helpers.mail import Mail
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
+from googleapiclient.errors import HttpError
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
@@ -78,6 +80,10 @@ def _load_google_service_account_credentials():
 
 
 _GOOGLE_CALENDAR_CREDENTIALS = _load_google_service_account_credentials()
+
+# Filled by startup probe (for /api/health and ops visibility)
+_GOOGLE_CALENDAR_PROBE_OK: Optional[bool] = None
+_GOOGLE_CALENDAR_PROBE_DETAIL: str = ""
 
 # ==================== MODELS ====================
 
@@ -344,6 +350,23 @@ def send_leave_notification_email(hr_emails: List[str], employee_name: str, leav
 
 # ==================== GOOGLE CALENDAR UTILITIES ====================
 
+def _log_calendar_http_error(operation: str, err: HttpError) -> None:
+    try:
+        raw = getattr(err, "content", None) or b""
+        content = raw.decode("utf-8", errors="replace") if isinstance(raw, bytes) else str(raw)
+    except Exception:
+        content = ""
+    reason = err._get_reason() if hasattr(err, "_get_reason") else str(err)
+    status = err.resp.status if getattr(err, "resp", None) else "?"
+    logger.error(
+        "Google Calendar %s failed: HTTP %s %s — %s",
+        operation,
+        status,
+        reason,
+        content[:800],
+    )
+
+
 def get_calendar_service():
     """Get Google Calendar service using service account with delegation"""
     if not _GOOGLE_CALENDAR_CREDENTIALS:
@@ -354,24 +377,32 @@ def get_calendar_service():
         delegated_credentials = _GOOGLE_CALENDAR_CREDENTIALS.with_subject(HR_EMAIL)
         service = build('calendar', 'v3', credentials=delegated_credentials)
         return service
+    except HttpError as e:
+        _log_calendar_http_error("build(calendar v3)", e)
+        return None
     except Exception as e:
-        logger.error(f"Failed to create Google Calendar service: {str(e)}")
+        logger.error("Failed to create Google Calendar service: %s", e)
         return None
 
-def create_calendar_event(summary: str, start_date: str, end_date: str, description: str = "", attendee_email: str = HR_EMAIL) -> Optional[str]:
-    """Create a Google Calendar event on HR's calendar"""
+
+def _insert_calendar_event_sync(
+    summary: str,
+    start_date: str,
+    end_date: str,
+    description: str,
+    attendee_email: Optional[str],
+) -> Optional[str]:
+    """Create an all-day event on the delegated user's primary calendar (blocking)."""
     service = get_calendar_service()
     if not service:
         logger.warning("Google Calendar service not available, skipping event creation")
         return None
-    
+
     try:
-        # Parse dates
         start = datetime.strptime(start_date, "%Y-%m-%d")
         end = datetime.strptime(end_date, "%Y-%m-%d")
-        # For all-day events, end date should be the next day
         end_plus_one = end + timedelta(days=1)
-        
+
         event = {
             'summary': summary,
             'description': description,
@@ -387,31 +418,81 @@ def create_calendar_event(summary: str, start_date: str, end_date: str, descript
                 'useDefault': True,
             },
         }
-        
+        if attendee_email and attendee_email.strip():
+            event['attendees'] = [{'email': attendee_email.strip()}]
+
         created_event = service.events().insert(
             calendarId='primary',
             body=event
         ).execute()
-        
-        logger.info(f"Google Calendar event created: {created_event.get('id')} - {summary}")
+
+        logger.info("Google Calendar event created: %s — %s", created_event.get('id'), summary)
         return created_event.get('id')
+    except HttpError as e:
+        _log_calendar_http_error("events.insert", e)
+        return None
     except Exception as e:
-        logger.error(f"Failed to create Google Calendar event: {str(e)}")
+        logger.error("Failed to create Google Calendar event: %s", e)
         return None
 
-def delete_calendar_event(event_id: str) -> bool:
-    """Delete a Google Calendar event"""
-    service = get_calendar_service()
-    if not service or not event_id:
+
+def _delete_calendar_event_sync(event_id: str) -> bool:
+    if not event_id:
         return False
-    
+    service = get_calendar_service()
+    if not service:
+        return False
+
     try:
         service.events().delete(calendarId='primary', eventId=event_id).execute()
-        logger.info(f"Google Calendar event deleted: {event_id}")
+        logger.info("Google Calendar event deleted: %s", event_id)
         return True
-    except Exception as e:
-        logger.error(f"Failed to delete Google Calendar event: {str(e)}")
+    except HttpError as e:
+        _log_calendar_http_error("events.delete", e)
         return False
+    except Exception as e:
+        logger.error("Failed to delete Google Calendar event: %s", e)
+        return False
+
+
+async def create_calendar_event_async(
+    summary: str,
+    start_date: str,
+    end_date: str,
+    description: str = "",
+    attendee_email: Optional[str] = None,
+) -> Optional[str]:
+    """Create calendar event without blocking the event loop."""
+    guest = attendee_email if attendee_email is not None else HR_EMAIL
+    return await asyncio.to_thread(
+        _insert_calendar_event_sync,
+        summary,
+        start_date,
+        end_date,
+        description,
+        guest,
+    )
+
+
+async def delete_calendar_event_async(event_id: str) -> bool:
+    return await asyncio.to_thread(_delete_calendar_event_sync, event_id)
+
+
+def _probe_calendar_access_sync() -> Tuple[bool, str]:
+    """Lightweight check: delegated credentials can call calendarList."""
+    if not _GOOGLE_CALENDAR_CREDENTIALS:
+        return False, "credentials_not_configured"
+    try:
+        delegated = _GOOGLE_CALENDAR_CREDENTIALS.with_subject(HR_EMAIL)
+        svc = build('calendar', 'v3', credentials=delegated)
+        svc.calendarList().list(maxResults=1).execute()
+        return True, "calendar_list_ok"
+    except HttpError as e:
+        _log_calendar_http_error("calendarList.list (startup probe)", e)
+        return False, f"http_{e.resp.status}_{e._get_reason() if hasattr(e, '_get_reason') else 'error'}"
+    except Exception as e:
+        logger.error("Google Calendar startup probe failed: %s", e)
+        return False, str(e)[:200]
 
 # ==================== HELPER FUNCTIONS ====================
 
@@ -504,7 +585,14 @@ async def calculate_leave_balance(employee_id: str, year: int = None):
 
 @api_router.get("/health")
 async def api_health():
-    return {"status": "ok"}
+    cal = {
+        "credentials_loaded": _GOOGLE_CALENDAR_CREDENTIALS is not None,
+        "delegate_email": HR_EMAIL,
+    }
+    if _GOOGLE_CALENDAR_PROBE_OK is not None:
+        cal["reachable"] = _GOOGLE_CALENDAR_PROBE_OK
+        cal["probe_detail"] = _GOOGLE_CALENDAR_PROBE_DETAIL
+    return {"status": "ok", "calendar": cal}
 
 
 @api_router.post("/auth/login", response_model=LoginResponse)
@@ -742,12 +830,12 @@ async def apply_leave(leave_request: LeaveRequest):
     if leave_request.reason:
         calendar_description += f"\nReason: {leave_request.reason}"
     
-    calendar_event_id = create_calendar_event(
+    calendar_event_id = await create_calendar_event_async(
         summary=calendar_summary,
         start_date=leave_request.start_date,
         end_date=leave_request.end_date,
         description=calendar_description,
-        attendee_email=HR_EMAIL
+        attendee_email=HR_EMAIL,
     )
     
     if calendar_event_id:
@@ -790,7 +878,7 @@ async def delete_leave(leave_id: str):
     
     # Delete Google Calendar event if exists
     if leave.get("google_calendar_event_id"):
-        delete_calendar_event(leave["google_calendar_event_id"])
+        await delete_calendar_event_async(leave["google_calendar_event_id"])
     
     result = await db.leaves.delete_one({"leave_id": leave_id})
     return {"message": "Leave deleted successfully"}
@@ -807,12 +895,12 @@ async def create_holiday(holiday: HolidayCreate):
     calendar_summary = f"Holiday - {holiday.name}"
     calendar_description = f"National Holiday: {holiday.name}"
     
-    calendar_event_id = create_calendar_event(
+    calendar_event_id = await create_calendar_event_async(
         summary=calendar_summary,
         start_date=holiday.date,
         end_date=holiday.date,
         description=calendar_description,
-        attendee_email=HR_EMAIL
+        attendee_email=HR_EMAIL,
     )
     
     if calendar_event_id:
@@ -841,7 +929,7 @@ async def delete_holiday(holiday_id: str):
     
     # Delete Google Calendar event if exists
     if holiday.get("google_calendar_event_id"):
-        delete_calendar_event(holiday["google_calendar_event_id"])
+        await delete_calendar_event_async(holiday["google_calendar_event_id"])
     
     result = await db.holidays.delete_one({"holiday_id": holiday_id})
     return {"message": "Holiday deleted successfully"}
@@ -941,6 +1029,19 @@ async def seed_hr_user():
             logger.info(f"Updated HR user {hr_email} with password")
         else:
             logger.info(f"HR user {hr_email} already exists with password")
+
+
+@app.on_event("startup")
+async def probe_google_calendar_on_startup():
+    global _GOOGLE_CALENDAR_PROBE_OK, _GOOGLE_CALENDAR_PROBE_DETAIL
+    ok, detail = await asyncio.to_thread(_probe_calendar_access_sync)
+    _GOOGLE_CALENDAR_PROBE_OK = ok
+    _GOOGLE_CALENDAR_PROBE_DETAIL = detail
+    if ok:
+        logger.info("Google Calendar probe: OK (%s)", detail)
+    else:
+        logger.warning("Google Calendar probe: failed — %s", detail)
+
 
 @app.on_event("shutdown")
 async def shutdown_db_client():
