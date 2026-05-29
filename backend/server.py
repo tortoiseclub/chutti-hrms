@@ -55,7 +55,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-HR_EMAIL = os.environ.get('HR_CALENDAR_DELEGATE_EMAIL', 'ipshita@tortoise.pro')
+HR_EMAIL = os.environ.get('HR_CALENDAR_DELEGATE_EMAIL', 'ooo@tortoise.pro')
 
 
 def _load_google_service_account_credentials():
