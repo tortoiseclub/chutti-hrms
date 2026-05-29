@@ -57,6 +57,8 @@ logger = logging.getLogger(__name__)
 
 HR_EMAIL = os.environ.get('HR_CALENDAR_DELEGATE_EMAIL', 'ooo@tortoise.pro')
 
+# testing commit
+
 
 def _load_google_service_account_credentials():
     scopes = ['https://www.googleapis.com/auth/calendar']
