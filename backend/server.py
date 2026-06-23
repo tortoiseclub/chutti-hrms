@@ -55,7 +55,10 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-HR_EMAIL = os.environ.get('HR_CALENDAR_DELEGATE_EMAIL', 'ooo@tortoise.pro')
+# Domain-wide delegation requires a real Workspace USER (not a Google Group).
+HR_DELEGATE_EMAIL = os.environ.get('HR_CALENDAR_DELEGATE_EMAIL', 'ipshita@tortoise.pro')
+# Calendar that receives leave/holiday events. Use a group address (e.g. ooo@…) for shared visibility.
+HR_CALENDAR_ID = os.environ.get('HR_CALENDAR_ID', 'primary').strip() or 'primary'
 
 # testing commit
 
@@ -376,7 +379,7 @@ def get_calendar_service():
         return None
 
     try:
-        delegated_credentials = _GOOGLE_CALENDAR_CREDENTIALS.with_subject(HR_EMAIL)
+        delegated_credentials = _GOOGLE_CALENDAR_CREDENTIALS.with_subject(HR_DELEGATE_EMAIL)
         service = build('calendar', 'v3', credentials=delegated_credentials)
         return service
     except HttpError as e:
@@ -394,7 +397,7 @@ def _insert_calendar_event_sync(
     description: str,
     attendee_email: Optional[str],
 ) -> Optional[str]:
-    """Create an all-day event on the delegated user's primary calendar (blocking)."""
+    """Create an all-day event on HR_CALENDAR_ID (blocking)."""
     service = get_calendar_service()
     if not service:
         logger.warning("Google Calendar service not available, skipping event creation")
@@ -424,7 +427,7 @@ def _insert_calendar_event_sync(
             event['attendees'] = [{'email': attendee_email.strip()}]
 
         created_event = service.events().insert(
-            calendarId='primary',
+            calendarId=HR_CALENDAR_ID,
             body=event
         ).execute()
 
@@ -446,7 +449,7 @@ def _delete_calendar_event_sync(event_id: str) -> bool:
         return False
 
     try:
-        service.events().delete(calendarId='primary', eventId=event_id).execute()
+        service.events().delete(calendarId=HR_CALENDAR_ID, eventId=event_id).execute()
         logger.info("Google Calendar event deleted: %s", event_id)
         return True
     except HttpError as e:
@@ -465,7 +468,7 @@ async def create_calendar_event_async(
     attendee_email: Optional[str] = None,
 ) -> Optional[str]:
     """Create calendar event without blocking the event loop."""
-    guest = attendee_email if attendee_email is not None else HR_EMAIL
+    guest = attendee_email
     return await asyncio.to_thread(
         _insert_calendar_event_sync,
         summary,
@@ -485,9 +488,12 @@ def _probe_calendar_access_sync() -> Tuple[bool, str]:
     if not _GOOGLE_CALENDAR_CREDENTIALS:
         return False, "credentials_not_configured"
     try:
-        delegated = _GOOGLE_CALENDAR_CREDENTIALS.with_subject(HR_EMAIL)
+        delegated = _GOOGLE_CALENDAR_CREDENTIALS.with_subject(HR_DELEGATE_EMAIL)
         svc = build('calendar', 'v3', credentials=delegated)
         svc.calendarList().list(maxResults=1).execute()
+        if HR_CALENDAR_ID != 'primary':
+            svc.calendars().get(calendarId=HR_CALENDAR_ID).execute()
+            return True, f"calendar_list_ok target={HR_CALENDAR_ID}"
         return True, "calendar_list_ok"
     except HttpError as e:
         _log_calendar_http_error("calendarList.list (startup probe)", e)
@@ -589,7 +595,8 @@ async def calculate_leave_balance(employee_id: str, year: int = None):
 async def api_health():
     cal = {
         "credentials_loaded": _GOOGLE_CALENDAR_CREDENTIALS is not None,
-        "delegate_email": HR_EMAIL,
+        "delegate_email": HR_DELEGATE_EMAIL,
+        "calendar_id": HR_CALENDAR_ID,
     }
     if _GOOGLE_CALENDAR_PROBE_OK is not None:
         cal["reachable"] = _GOOGLE_CALENDAR_PROBE_OK
@@ -837,7 +844,6 @@ async def apply_leave(leave_request: LeaveRequest):
         start_date=leave_request.start_date,
         end_date=leave_request.end_date,
         description=calendar_description,
-        attendee_email=HR_EMAIL,
     )
     
     if calendar_event_id:
@@ -902,7 +908,6 @@ async def create_holiday(holiday: HolidayCreate):
         start_date=holiday.date,
         end_date=holiday.date,
         description=calendar_description,
-        attendee_email=HR_EMAIL,
     )
     
     if calendar_event_id:

@@ -33,7 +33,8 @@ Use **two Vercel projects** from the same Git repository: one for the API, one f
 | `CORS_ORIGINS` | Frontend origin(s), comma-separated, no spaces (e.g. `https://app.vercel.app`) |
 | `GOOGLE_CALENDAR_CREDENTIALS_JSON` | Optional: service account JSON one line |
 | `GOOGLE_CALENDAR_CREDENTIALS_JSON_B64` | Optional: base64 of that JSON |
-| `HR_CALENDAR_DELEGATE_EMAIL` | Workspace user for domain-wide delegation |
+| `HR_CALENDAR_DELEGATE_EMAIL` | Real Workspace user for domain-wide delegation (not a group) |
+| `HR_CALENDAR_ID` | Optional: target calendar (e.g. `ooo@yourdomain.com` group calendar) |
 
 6. Deploy. Note the **production URL** (e.g. `https://chutti-api.vercel.app`).
 7. Smoke test: `GET https://<api>/api/health` → `{"status":"ok"}`.
@@ -59,7 +60,7 @@ Attach domains to each project in Vercel, then update `REACT_APP_BACKEND_URL`, `
 
 ## 5. Google Calendar (Google Workspace) checklist
 
-Leave and holiday flows create events on the **delegated user’s primary calendar** (`HR_CALENDAR_DELEGATE_EMAIL`) using a **service account** and **domain-wide delegation**. All of the following must be true or Calendar calls return 403 and only show up in server logs.
+Leave and holiday flows create events on **`HR_CALENDAR_ID`** (default: the delegated user’s primary calendar) using a **service account** and **domain-wide delegation** as **`HR_CALENDAR_DELEGATE_EMAIL`**. All of the following must be true or Calendar calls return 403 and only show up in server logs.
 
 ### Google Cloud (project that owns the service account)
 
@@ -83,7 +84,10 @@ Leave and holiday flows create events on the **delegated user’s primary calend
 |----------|---------|
 | `GOOGLE_CALENDAR_CREDENTIALS_JSON_B64` | **Recommended on Vercel**: base64-encode the entire JSON key file (`base64 -i key.json \| tr -d '\n'`) and paste the string. Avoids broken escaping from multiline JSON. |
 | `GOOGLE_CALENDAR_CREDENTIALS_JSON` | Alternative: single-line JSON (fragile in dashboards). |
-| `HR_CALENDAR_DELEGATE_EMAIL` | A **real Workspace user** in your domain (e.g. `hr@yourdomain.com`) whose **primary** calendar receives events. Must match the domain where delegation was granted. |
+| `HR_CALENDAR_DELEGATE_EMAIL` | A **real Workspace user** (not a Google Group) used only for domain-wide delegation. Example: `ipshita@yourdomain.com`. |
+| `HR_CALENDAR_ID` | Calendar that receives events. For a shared OOO group calendar, set to the group address (e.g. `ooo@yourdomain.com`). Omit or set to `primary` to use the delegate user’s primary calendar. |
+
+**Google Group calendar:** `HR_CALENDAR_DELEGATE_EMAIL` must stay a real user who can manage the group calendar (group manager or admin). Set `HR_CALENDAR_ID` to the group email. In Admin Console → Groups → your OOO group → enable **Calendar** and **Share calendar with group members** so everyone sees events in Google Calendar.
 
 Local dev: put the JSON next to `server.py` as `google_calendar_credentials.json` (gitignored via `*credentials*` patterns).
 
