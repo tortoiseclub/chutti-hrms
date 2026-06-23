@@ -432,37 +432,70 @@ def _resolve_calendar_id(service, *, force_refresh: bool = False) -> Optional[st
             _CALENDAR_RESOLVE_DETAIL = f'direct_id_not_accessible:{target}'
             return None
 
-    # Group/user emails (e.g. ooo@tortoise.pro) are not valid calendarIds — search calendarList.
+    # Try common suffixes when only the bare ID fragment was copied from Google UI.
+    if '@' not in target:
+        for suffix in (
+            '@group.calendar.google.com',
+            '@import.calendar.google.com',
+        ):
+            candidate = f'{target}{suffix}'
+            try:
+                service.calendars().get(calendarId=candidate).execute()
+                _RESOLVED_CALENDAR_ID = candidate
+                _CALENDAR_RESOLVE_DETAIL = f'direct_id_with_suffix:{candidate}'
+                return candidate
+            except HttpError as e:
+                if e.resp.status != 404:
+                    _log_calendar_http_error(f"calendars.get({candidate})", e)
+
     entries = _list_delegate_calendars(service)
-    lookup = target.lower()
+    lookup = target.lower().strip()
     local = lookup.split('@')[0]
 
-    for entry in entries:
+    writable = [
+        e for e in entries
+        if (e.get('accessRole') or '') in ('owner', 'writer')
+    ]
+
+    for entry in writable:
         cal_id = entry.get('id') or ''
+        cal_id_lower = cal_id.lower()
+        cal_id_base = cal_id_lower.split('@')[0]
         summary = (entry.get('summary') or '').lower()
-        access = entry.get('accessRole') or ''
-        if access not in ('owner', 'writer'):
-            continue
-        if cal_id.lower() == lookup:
+
+        if cal_id_lower == lookup:
             _RESOLVED_CALENDAR_ID = cal_id
             _CALENDAR_RESOLVE_DETAIL = f'resolved_by_id:{cal_id}'
+            return cal_id
+        if cal_id_base == lookup or lookup in cal_id_base or cal_id_base.startswith(lookup):
+            _RESOLVED_CALENDAR_ID = cal_id
+            _CALENDAR_RESOLVE_DETAIL = f'resolved_by_id_prefix:{cal_id}'
             return cal_id
         if summary == lookup or summary == local:
             _RESOLVED_CALENDAR_ID = cal_id
             _CALENDAR_RESOLVE_DETAIL = f'resolved_by_summary:{summary!r}->{cal_id}'
+            return cal_id
+        if len(lookup) >= 3 and lookup in summary:
+            _RESOLVED_CALENDAR_ID = cal_id
+            _CALENDAR_RESOLVE_DETAIL = f'resolved_by_summary_contains:{summary!r}->{cal_id}'
             return cal_id
 
     available = [
         f"{e.get('summary', '?')} ({e.get('id', '?')}, {e.get('accessRole', '?')})"
         for e in entries
     ]
+    writable_summaries = [
+        f"{e.get('summary', '?')} → {e.get('id', '?')}"
+        for e in writable
+    ]
     logger.error(
         "Cannot resolve HR_CALENDAR_ID=%r for delegate %s. "
-        "The group email is not a calendar ID — use the full ID from Google Calendar "
-        "Settings → your OOO calendar → Integrate calendar, or ensure the delegate user "
-        "has that group calendar in their sidebar. Available calendars: %s",
+        "Use the full Calendar ID from Google Calendar → Settings → Integrate calendar "
+        "(ends with @group.calendar.google.com), or a writable calendar name such as "
+        "'OOO Calendar'. Writable calendars for this delegate: %s. All calendars: %s",
         target,
         HR_DELEGATE_EMAIL,
+        writable_summaries,
         available,
     )
     _CALENDAR_RESOLVE_DETAIL = f'not_found:configured={target}:available={len(entries)}'
