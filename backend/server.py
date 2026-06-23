@@ -59,9 +59,12 @@ logger = logging.getLogger(__name__)
 HR_DELEGATE_EMAIL = os.environ.get('HR_CALENDAR_DELEGATE_EMAIL', 'ipshita@tortoise.pro')
 # Calendar that receives leave/holiday events. Use a group address (e.g. ooo@…) for shared visibility.
 HR_CALENDAR_ID = os.environ.get('HR_CALENDAR_ID', 'primary').strip() or 'primary'
-# Google Group invited on each event so members see OOO on their primary calendars.
+# Google Group address — used to share the roster calendar via ACL (NOT as an event attendee;
+# the Calendar API cannot propagate group-attendee events to member calendars).
 HR_CALENDAR_GROUP_EMAIL = os.environ.get('HR_CALENDAR_GROUP_EMAIL', 'ooo@tortoise.pro').strip()
-# all | externalOnly | none — 'all' pushes events to attendee calendars (recommended).
+# Invite each employee individually so events appear on their primary calendars (API-reliable).
+HR_CALENDAR_INVITE_TEAM = os.environ.get('HR_CALENDAR_INVITE_TEAM', 'true').lower() in ('1', 'true', 'yes')
+# all | externalOnly | none
 HR_CALENDAR_SEND_UPDATES = os.environ.get('HR_CALENDAR_SEND_UPDATES', 'all').strip() or 'all'
 
 # Resolved once at runtime (group emails map to xxx@group.calendar.google.com)
@@ -506,14 +509,64 @@ def _resolve_calendar_id(service, *, force_refresh: bool = False) -> Optional[st
     return None
 
 
+def _ensure_calendar_shared_with_group_sync(service, calendar_id: str) -> bool:
+    """Grant the Google Group read access to the roster calendar (one-time ACL)."""
+    if not HR_CALENDAR_GROUP_EMAIL or calendar_id == 'primary':
+        return False
+    try:
+        acl = service.acl().list(calendarId=calendar_id).execute()
+        group_lower = HR_CALENDAR_GROUP_EMAIL.lower()
+        for rule in acl.get('items', []):
+            scope = rule.get('scope', {})
+            if (
+                scope.get('type') == 'group'
+                and (scope.get('value') or '').lower() == group_lower
+            ):
+                return True
+        service.acl().insert(
+            calendarId=calendar_id,
+            body={
+                'scope': {'type': 'group', 'value': HR_CALENDAR_GROUP_EMAIL},
+                'role': 'reader',
+            },
+        ).execute()
+        logger.info(
+            "Shared calendar %s with group %s (reader access)",
+            calendar_id,
+            HR_CALENDAR_GROUP_EMAIL,
+        )
+        return True
+    except HttpError as e:
+        _log_calendar_http_error(f"acl.insert({HR_CALENDAR_GROUP_EMAIL})", e)
+        return False
+
+
+def _get_calendar_event_sync(event_id: str) -> Optional[dict]:
+    service = get_calendar_service()
+    if not service or not event_id:
+        return None
+    calendar_id = _resolve_calendar_id(service)
+    if not calendar_id:
+        return None
+    try:
+        return service.events().get(calendarId=calendar_id, eventId=event_id).execute()
+    except HttpError as e:
+        _log_calendar_http_error(f"events.get({event_id})", e)
+        return None
+
+
 def _insert_calendar_event_sync(
     summary: str,
     start_date: str,
     end_date: str,
     description: str,
-    attendee_email: Optional[str],
+    attendee_emails: Optional[list],
 ) -> Optional[str]:
-    """Create an all-day event on HR_CALENDAR_ID (blocking)."""
+    """Create an all-day event on HR_CALENDAR_ID (blocking).
+
+    Note: Inviting a Google Group as an attendee via the API does NOT show the event
+    on members' calendars (Google Calendar API limitation). Use individual emails instead.
+    """
     service = get_calendar_service()
     if not service:
         logger.warning("Google Calendar service not available, skipping event creation")
@@ -540,34 +593,30 @@ def _insert_calendar_event_sync(
                 'useDefault': True,
             },
         }
-        attendees = []
-        if attendee_email and attendee_email.strip():
-            attendees.append({'email': attendee_email.strip()})
-        if (
-            HR_CALENDAR_GROUP_EMAIL
-            and HR_CALENDAR_GROUP_EMAIL.lower()
-            not in {a['email'].lower() for a in attendees}
-        ):
-            attendees.append({'email': HR_CALENDAR_GROUP_EMAIL})
-        if attendees:
-            event['attendees'] = attendees
+        unique_attendees = sorted({
+            email.strip().lower()
+            for email in (attendee_emails or [])
+            if email and email.strip()
+        })
+        if unique_attendees:
+            event['attendees'] = [{'email': email} for email in unique_attendees]
 
         calendar_id = _resolve_calendar_id(service)
         if not calendar_id:
             return None
 
         insert_kwargs = {'calendarId': calendar_id, 'body': event}
-        if attendees and HR_CALENDAR_SEND_UPDATES in ('all', 'externalOnly', 'none'):
+        if unique_attendees and HR_CALENDAR_SEND_UPDATES in ('all', 'externalOnly', 'none'):
             insert_kwargs['sendUpdates'] = HR_CALENDAR_SEND_UPDATES
 
         created_event = service.events().insert(**insert_kwargs).execute()
 
         logger.info(
-            "Google Calendar event created: %s — %s (calendar=%s, group=%s, link=%s)",
+            "Google Calendar event created: %s — %s (calendar=%s, attendees=%d, link=%s)",
             created_event.get('id'),
             summary,
             calendar_id,
-            HR_CALENDAR_GROUP_EMAIL or 'none',
+            len(unique_attendees),
             created_event.get('htmlLink', ''),
         )
         return created_event.get('id')
@@ -606,18 +655,32 @@ async def create_calendar_event_async(
     start_date: str,
     end_date: str,
     description: str = "",
-    attendee_email: Optional[str] = None,
+    attendee_emails: Optional[list] = None,
 ) -> Optional[str]:
     """Create calendar event without blocking the event loop."""
-    guest = attendee_email
     return await asyncio.to_thread(
         _insert_calendar_event_sync,
         summary,
         start_date,
         end_date,
         description,
-        guest,
+        attendee_emails,
     )
+
+
+async def get_calendar_attendee_emails() -> list:
+    """Individual user emails for event invites (group-as-attendee does not work via API)."""
+    if not HR_CALENDAR_INVITE_TEAM:
+        return [HR_DELEGATE_EMAIL] if HR_DELEGATE_EMAIL else []
+    employees = await db.employees.find({}, {"_id": 0, "email": 1}).to_list(1000)
+    emails = {
+        emp["email"].strip().lower()
+        for emp in employees
+        if emp.get("email") and emp["email"].strip()
+    }
+    if HR_DELEGATE_EMAIL:
+        emails.add(HR_DELEGATE_EMAIL.strip().lower())
+    return sorted(emails)
 
 
 async def delete_calendar_event_async(event_id: str) -> bool:
@@ -636,6 +699,7 @@ def _probe_calendar_access_sync() -> Tuple[bool, str]:
         if HR_CALENDAR_ID == 'primary':
             return True, "calendar_list_ok"
         if resolved:
+            _ensure_calendar_shared_with_group_sync(svc, resolved)
             return True, f"calendar_ok resolved={resolved} ({_CALENDAR_RESOLVE_DETAIL})"
         return False, _CALENDAR_RESOLVE_DETAIL or f"calendar_not_found:{HR_CALENDAR_ID}"
     except HttpError as e:
@@ -741,14 +805,50 @@ async def api_health():
         "delegate_email": HR_DELEGATE_EMAIL,
         "calendar_id": HR_CALENDAR_ID,
         "group_email": HR_CALENDAR_GROUP_EMAIL or None,
+        "invite_team": HR_CALENDAR_INVITE_TEAM,
         "send_updates": HR_CALENDAR_SEND_UPDATES,
         "resolved_calendar_id": _RESOLVED_CALENDAR_ID,
         "calendar_resolve_detail": _CALENDAR_RESOLVE_DETAIL or None,
+        "note": (
+            "Group-as-attendee via API does not show events on member calendars. "
+            "The app invites each employee individually and shares the roster calendar with the group via ACL."
+        ),
     }
     if _GOOGLE_CALENDAR_PROBE_OK is not None:
         cal["reachable"] = _GOOGLE_CALENDAR_PROBE_OK
         cal["probe_detail"] = _GOOGLE_CALENDAR_PROBE_DETAIL
     return {"status": "ok", "calendar": cal}
+
+
+@api_router.get("/calendar/google/verify")
+async def verify_google_calendar_event(event_id: Optional[str] = None):
+    """Verify a Google Calendar event exists and return what Google stored (debug/ops)."""
+    if not _GOOGLE_CALENDAR_CREDENTIALS:
+        raise HTTPException(status_code=503, detail="Google Calendar not configured")
+    if not event_id:
+        raise HTTPException(status_code=400, detail="event_id query parameter required")
+    event = await asyncio.to_thread(_get_calendar_event_sync, event_id)
+    if not event:
+        raise HTTPException(status_code=404, detail="Event not found on configured calendar")
+    attendees = event.get("attendees") or []
+    return {
+        "event_id": event.get("id"),
+        "summary": event.get("summary"),
+        "start": event.get("start"),
+        "end": event.get("end"),
+        "organizer": event.get("organizer"),
+        "html_link": event.get("htmlLink"),
+        "status": event.get("status"),
+        "attendee_count": len(attendees),
+        "attendees": [
+            {
+                "email": a.get("email"),
+                "responseStatus": a.get("responseStatus"),
+            }
+            for a in attendees
+        ],
+        "calendar_id": _RESOLVED_CALENDAR_ID or HR_CALENDAR_ID,
+    }
 
 
 @api_router.post("/auth/login", response_model=LoginResponse)
@@ -986,11 +1086,13 @@ async def apply_leave(leave_request: LeaveRequest):
     if leave_request.reason:
         calendar_description += f"\nReason: {leave_request.reason}"
     
+    attendee_emails = await get_calendar_attendee_emails()
     calendar_event_id = await create_calendar_event_async(
         summary=calendar_summary,
         start_date=leave_request.start_date,
         end_date=leave_request.end_date,
         description=calendar_description,
+        attendee_emails=attendee_emails,
     )
     
     if calendar_event_id:
@@ -1050,11 +1152,13 @@ async def create_holiday(holiday: HolidayCreate):
     calendar_summary = f"Holiday - {holiday.name}"
     calendar_description = f"National Holiday: {holiday.name}"
     
+    attendee_emails = await get_calendar_attendee_emails()
     calendar_event_id = await create_calendar_event_async(
         summary=calendar_summary,
         start_date=holiday.date,
         end_date=holiday.date,
         description=calendar_description,
+        attendee_emails=attendee_emails,
     )
     
     if calendar_event_id:

@@ -87,10 +87,15 @@ Leave and holiday flows create events on **`HR_CALENDAR_ID`** (default: the dele
 | `GOOGLE_CALENDAR_CREDENTIALS_JSON` | Alternative: single-line JSON (fragile in dashboards). |
 | `HR_CALENDAR_DELEGATE_EMAIL` | A **real Workspace user** (not a Google Group) used only for domain-wide delegation. Example: `ipshita@yourdomain.com`. |
 | `HR_CALENDAR_ID` | Calendar that stores the master OOO roster (full `@group.calendar.google.com` ID or calendar name like `OOO Calendar`). |
-| `HR_CALENDAR_GROUP_EMAIL` | Google Group (e.g. `ooo@yourdomain.com`) invited on every event so **all members see OOO on their primary calendars**. |
-| `HR_CALENDAR_SEND_UPDATES` | `all` (default), `externalOnly`, or `none`. Use `all` so group members receive the event on their calendars. |
+| `HR_CALENDAR_GROUP_EMAIL` | Google Group given **read access to the roster calendar** via ACL (e.g. `ooo@yourdomain.com`). **Do not rely on inviting this group on each event** — the Calendar API does not propagate group-attendee events to member calendars. |
+| `HR_CALENDAR_INVITE_TEAM` | `true` (default): invite **each employee email individually** on every leave/holiday so events appear on their primary calendars. |
+| `HR_CALENDAR_SEND_UPDATES` | `all` (default), `externalOnly`, or `none`. |
 
-**Why events may not appear for everyone:** Events on a secondary calendar (e.g. “OOO Calendar”) are only visible to people who have that calendar **enabled in the Google Calendar sidebar**. Group members do **not** auto-subscribe to ipshita’s personal “OOO Calendar”. The app now invites `HR_CALENDAR_GROUP_EMAIL` on each event — that is how Google pushes OOO to every group member’s primary calendar.
+**Google Calendar API limitation (important):** Creating an event with `ooo@yourdomain.com` as an attendee via the API **does not** make the event visible on group members' calendars. This is a [known API limitation](https://groups.google.com/g/google-calendar-api/c/mpCsVKMQi48); it works in the Google Calendar UI but not via API. The app works around this by:
+1. Inviting every employee in the HRMS database individually (`HR_CALENDAR_INVITE_TEAM=true`).
+2. Sharing the OOO roster calendar with the Google Group via ACL so members can subscribe to the shared calendar.
+
+**Verify an event:** `GET /api/calendar/google/verify?event_id=<id>` returns what Google stored (attendees, link, organizer).
 
 **Google Group calendar setup:**
 1. Admin Console → Groups → OOO group → enable **Calendar** and share with members.
