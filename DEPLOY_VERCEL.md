@@ -34,7 +34,8 @@ Use **two Vercel projects** from the same Git repository: one for the API, one f
 | `GOOGLE_CALENDAR_CREDENTIALS_JSON` | Optional: service account JSON one line |
 | `GOOGLE_CALENDAR_CREDENTIALS_JSON_B64` | Optional: base64 of that JSON |
 | `HR_CALENDAR_DELEGATE_EMAIL` | Real Workspace user for domain-wide delegation (not a group) |
-| `HR_CALENDAR_ID` | Optional: target calendar (e.g. `ooo@yourdomain.com` group calendar) |
+| `HR_CALENDAR_ID` | OOO roster calendar (full ID or name) |
+| `HR_CALENDAR_GROUP_EMAIL` | Google Group invited on each event (e.g. `ooo@yourdomain.com`) |
 
 6. Deploy. Note the **production URL** (e.g. `https://chutti-api.vercel.app`).
 7. Smoke test: `GET https://<api>/api/health` → `{"status":"ok"}`.
@@ -85,13 +86,17 @@ Leave and holiday flows create events on **`HR_CALENDAR_ID`** (default: the dele
 | `GOOGLE_CALENDAR_CREDENTIALS_JSON_B64` | **Recommended on Vercel**: base64-encode the entire JSON key file (`base64 -i key.json \| tr -d '\n'`) and paste the string. Avoids broken escaping from multiline JSON. |
 | `GOOGLE_CALENDAR_CREDENTIALS_JSON` | Alternative: single-line JSON (fragile in dashboards). |
 | `HR_CALENDAR_DELEGATE_EMAIL` | A **real Workspace user** (not a Google Group) used only for domain-wide delegation. Example: `ipshita@yourdomain.com`. |
-| `HR_CALENDAR_ID` | Calendar that receives events. Use the **full Calendar ID** from Google Calendar → Settings → your OOO calendar → **Integrate calendar** (looks like `abc...@group.calendar.google.com`). The group address (`ooo@…`) is **not** a valid calendar ID — the app will try to match it from the delegate user’s calendar list, but the reliable fix is to paste the full ID. |
+| `HR_CALENDAR_ID` | Calendar that stores the master OOO roster (full `@group.calendar.google.com` ID or calendar name like `OOO Calendar`). |
+| `HR_CALENDAR_GROUP_EMAIL` | Google Group (e.g. `ooo@yourdomain.com`) invited on every event so **all members see OOO on their primary calendars**. |
+| `HR_CALENDAR_SEND_UPDATES` | `all` (default), `externalOnly`, or `none`. Use `all` so group members receive the event on their calendars. |
+
+**Why events may not appear for everyone:** Events on a secondary calendar (e.g. “OOO Calendar”) are only visible to people who have that calendar **enabled in the Google Calendar sidebar**. Group members do **not** auto-subscribe to ipshita’s personal “OOO Calendar”. The app now invites `HR_CALENDAR_GROUP_EMAIL` on each event — that is how Google pushes OOO to every group member’s primary calendar.
 
 **Google Group calendar setup:**
 1. Admin Console → Groups → OOO group → enable **Calendar** and share with members.
-2. Log in as the **delegate user** (`HR_CALENDAR_DELEGATE_EMAIL`) in Google Calendar and ensure the OOO group calendar appears in the sidebar (under “Other calendars” or similar).
-3. Open that calendar’s settings → **Integrate calendar** → copy **Calendar ID** → set as `HR_CALENDAR_ID`.
-4. The delegate user needs **Make changes to events** (writer) access on that calendar.
+2. Set `HR_CALENDAR_GROUP_EMAIL` to the group address (`ooo@…`).
+3. Optionally share the OOO roster calendar with the group: Google Calendar → OOO Calendar → **Share with specific people** → add `ooo@…` with “See all event details”.
+4. The delegate user must have **Make changes to events** on `HR_CALENDAR_ID`.
 
 Local dev: put the JSON next to `server.py` as `google_calendar_credentials.json` (gitignored via `*credentials*` patterns).
 

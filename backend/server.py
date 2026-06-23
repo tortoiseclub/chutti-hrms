@@ -59,6 +59,10 @@ logger = logging.getLogger(__name__)
 HR_DELEGATE_EMAIL = os.environ.get('HR_CALENDAR_DELEGATE_EMAIL', 'ipshita@tortoise.pro')
 # Calendar that receives leave/holiday events. Use a group address (e.g. ooo@…) for shared visibility.
 HR_CALENDAR_ID = os.environ.get('HR_CALENDAR_ID', 'primary').strip() or 'primary'
+# Google Group invited on each event so members see OOO on their primary calendars.
+HR_CALENDAR_GROUP_EMAIL = os.environ.get('HR_CALENDAR_GROUP_EMAIL', 'ooo@tortoise.pro').strip()
+# all | externalOnly | none — 'all' pushes events to attendee calendars (recommended).
+HR_CALENDAR_SEND_UPDATES = os.environ.get('HR_CALENDAR_SEND_UPDATES', 'all').strip() or 'all'
 
 # Resolved once at runtime (group emails map to xxx@group.calendar.google.com)
 _RESOLVED_CALENDAR_ID: Optional[str] = None
@@ -523,6 +527,7 @@ def _insert_calendar_event_sync(
         event = {
             'summary': summary,
             'description': description,
+            'visibility': 'public',
             'start': {
                 'date': start.strftime("%Y-%m-%d"),
                 'timeZone': 'Asia/Kolkata',
@@ -535,24 +540,35 @@ def _insert_calendar_event_sync(
                 'useDefault': True,
             },
         }
+        attendees = []
         if attendee_email and attendee_email.strip():
-            event['attendees'] = [{'email': attendee_email.strip()}]
+            attendees.append({'email': attendee_email.strip()})
+        if (
+            HR_CALENDAR_GROUP_EMAIL
+            and HR_CALENDAR_GROUP_EMAIL.lower()
+            not in {a['email'].lower() for a in attendees}
+        ):
+            attendees.append({'email': HR_CALENDAR_GROUP_EMAIL})
+        if attendees:
+            event['attendees'] = attendees
 
         calendar_id = _resolve_calendar_id(service)
         if not calendar_id:
             return None
 
-        created_event = service.events().insert(
-            calendarId=calendar_id,
-            body=event
-        ).execute()
+        insert_kwargs = {'calendarId': calendar_id, 'body': event}
+        if attendees and HR_CALENDAR_SEND_UPDATES in ('all', 'externalOnly', 'none'):
+            insert_kwargs['sendUpdates'] = HR_CALENDAR_SEND_UPDATES
+
+        created_event = service.events().insert(**insert_kwargs).execute()
 
         logger.info(
-            "Google Calendar event created: %s — %s (calendar=%s, resolve=%s)",
+            "Google Calendar event created: %s — %s (calendar=%s, group=%s, link=%s)",
             created_event.get('id'),
             summary,
             calendar_id,
-            _CALENDAR_RESOLVE_DETAIL,
+            HR_CALENDAR_GROUP_EMAIL or 'none',
+            created_event.get('htmlLink', ''),
         )
         return created_event.get('id')
     except HttpError as e:
@@ -724,6 +740,8 @@ async def api_health():
         "credentials_loaded": _GOOGLE_CALENDAR_CREDENTIALS is not None,
         "delegate_email": HR_DELEGATE_EMAIL,
         "calendar_id": HR_CALENDAR_ID,
+        "group_email": HR_CALENDAR_GROUP_EMAIL or None,
+        "send_updates": HR_CALENDAR_SEND_UPDATES,
         "resolved_calendar_id": _RESOLVED_CALENDAR_ID,
         "calendar_resolve_detail": _CALENDAR_RESOLVE_DETAIL or None,
     }
