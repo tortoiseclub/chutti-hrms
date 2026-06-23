@@ -66,6 +66,12 @@ HR_CALENDAR_GROUP_EMAIL = os.environ.get('HR_CALENDAR_GROUP_EMAIL', 'ooo@tortois
 HR_CALENDAR_INVITE_TEAM = os.environ.get('HR_CALENDAR_INVITE_TEAM', 'true').lower() in ('1', 'true', 'yes')
 # all | externalOnly | none
 HR_CALENDAR_SEND_UPDATES = os.environ.get('HR_CALENDAR_SEND_UPDATES', 'all').strip() or 'all'
+# Comma-separated emails to skip when inviting the team to calendar events.
+HR_CALENDAR_EXCLUDE_EMAILS = {
+    e.strip().lower()
+    for e in os.environ.get('HR_CALENDAR_EXCLUDE_EMAILS', 'vardhan@tortoise.pro').split(',')
+    if e.strip()
+}
 
 # Resolved once at runtime (group emails map to xxx@group.calendar.google.com)
 _RESOLVED_CALENDAR_ID: Optional[str] = None
@@ -680,6 +686,7 @@ async def get_calendar_attendee_emails() -> list:
     }
     if HR_DELEGATE_EMAIL:
         emails.add(HR_DELEGATE_EMAIL.strip().lower())
+    emails -= HR_CALENDAR_EXCLUDE_EMAILS
     return sorted(emails)
 
 
@@ -806,6 +813,7 @@ async def api_health():
         "calendar_id": HR_CALENDAR_ID,
         "group_email": HR_CALENDAR_GROUP_EMAIL or None,
         "invite_team": HR_CALENDAR_INVITE_TEAM,
+        "exclude_emails": sorted(HR_CALENDAR_EXCLUDE_EMAILS),
         "send_updates": HR_CALENDAR_SEND_UPDATES,
         "resolved_calendar_id": _RESOLVED_CALENDAR_ID,
         "calendar_resolve_detail": _CALENDAR_RESOLVE_DETAIL or None,
