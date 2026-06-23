@@ -60,6 +60,10 @@ HR_DELEGATE_EMAIL = os.environ.get('HR_CALENDAR_DELEGATE_EMAIL', 'ipshita@tortoi
 # Calendar that receives leave/holiday events. Use a group address (e.g. ooo@…) for shared visibility.
 HR_CALENDAR_ID = os.environ.get('HR_CALENDAR_ID', 'primary').strip() or 'primary'
 
+# Resolved once at runtime (group emails map to xxx@group.calendar.google.com)
+_RESOLVED_CALENDAR_ID: Optional[str] = None
+_CALENDAR_RESOLVE_DETAIL: str = ""
+
 # testing commit
 
 
@@ -390,6 +394,81 @@ def get_calendar_service():
         return None
 
 
+def _list_delegate_calendars(service) -> list:
+    """All calendars visible to the delegated user."""
+    entries: list = []
+    page_token = None
+    while True:
+        resp = service.calendarList().list(pageToken=page_token, maxResults=250).execute()
+        entries.extend(resp.get('items', []))
+        page_token = resp.get('nextPageToken')
+        if not page_token:
+            break
+    return entries
+
+
+def _resolve_calendar_id(service, *, force_refresh: bool = False) -> Optional[str]:
+    """Map HR_CALENDAR_ID to an API calendarId the delegate can write to."""
+    global _RESOLVED_CALENDAR_ID, _CALENDAR_RESOLVE_DETAIL
+
+    if _RESOLVED_CALENDAR_ID and not force_refresh:
+        return _RESOLVED_CALENDAR_ID
+
+    target = HR_CALENDAR_ID
+    if target == 'primary':
+        _RESOLVED_CALENDAR_ID = 'primary'
+        _CALENDAR_RESOLVE_DETAIL = 'primary'
+        return 'primary'
+
+    # Full calendar IDs (e.g. abc...@group.calendar.google.com) — use directly.
+    if target.endswith('@group.calendar.google.com'):
+        try:
+            service.calendars().get(calendarId=target).execute()
+            _RESOLVED_CALENDAR_ID = target
+            _CALENDAR_RESOLVE_DETAIL = 'direct_group_id'
+            return target
+        except HttpError as e:
+            _log_calendar_http_error(f"calendars.get({target})", e)
+            _CALENDAR_RESOLVE_DETAIL = f'direct_id_not_accessible:{target}'
+            return None
+
+    # Group/user emails (e.g. ooo@tortoise.pro) are not valid calendarIds — search calendarList.
+    entries = _list_delegate_calendars(service)
+    lookup = target.lower()
+    local = lookup.split('@')[0]
+
+    for entry in entries:
+        cal_id = entry.get('id') or ''
+        summary = (entry.get('summary') or '').lower()
+        access = entry.get('accessRole') or ''
+        if access not in ('owner', 'writer'):
+            continue
+        if cal_id.lower() == lookup:
+            _RESOLVED_CALENDAR_ID = cal_id
+            _CALENDAR_RESOLVE_DETAIL = f'resolved_by_id:{cal_id}'
+            return cal_id
+        if summary == lookup or summary == local:
+            _RESOLVED_CALENDAR_ID = cal_id
+            _CALENDAR_RESOLVE_DETAIL = f'resolved_by_summary:{summary!r}->{cal_id}'
+            return cal_id
+
+    available = [
+        f"{e.get('summary', '?')} ({e.get('id', '?')}, {e.get('accessRole', '?')})"
+        for e in entries
+    ]
+    logger.error(
+        "Cannot resolve HR_CALENDAR_ID=%r for delegate %s. "
+        "The group email is not a calendar ID — use the full ID from Google Calendar "
+        "Settings → your OOO calendar → Integrate calendar, or ensure the delegate user "
+        "has that group calendar in their sidebar. Available calendars: %s",
+        target,
+        HR_DELEGATE_EMAIL,
+        available,
+    )
+    _CALENDAR_RESOLVE_DETAIL = f'not_found:configured={target}:available={len(entries)}'
+    return None
+
+
 def _insert_calendar_event_sync(
     summary: str,
     start_date: str,
@@ -426,12 +505,22 @@ def _insert_calendar_event_sync(
         if attendee_email and attendee_email.strip():
             event['attendees'] = [{'email': attendee_email.strip()}]
 
+        calendar_id = _resolve_calendar_id(service)
+        if not calendar_id:
+            return None
+
         created_event = service.events().insert(
-            calendarId=HR_CALENDAR_ID,
+            calendarId=calendar_id,
             body=event
         ).execute()
 
-        logger.info("Google Calendar event created: %s — %s", created_event.get('id'), summary)
+        logger.info(
+            "Google Calendar event created: %s — %s (calendar=%s, resolve=%s)",
+            created_event.get('id'),
+            summary,
+            calendar_id,
+            _CALENDAR_RESOLVE_DETAIL,
+        )
         return created_event.get('id')
     except HttpError as e:
         _log_calendar_http_error("events.insert", e)
@@ -449,7 +538,10 @@ def _delete_calendar_event_sync(event_id: str) -> bool:
         return False
 
     try:
-        service.events().delete(calendarId=HR_CALENDAR_ID, eventId=event_id).execute()
+        calendar_id = _resolve_calendar_id(service)
+        if not calendar_id:
+            return False
+        service.events().delete(calendarId=calendar_id, eventId=event_id).execute()
         logger.info("Google Calendar event deleted: %s", event_id)
         return True
     except HttpError as e:
@@ -491,10 +583,12 @@ def _probe_calendar_access_sync() -> Tuple[bool, str]:
         delegated = _GOOGLE_CALENDAR_CREDENTIALS.with_subject(HR_DELEGATE_EMAIL)
         svc = build('calendar', 'v3', credentials=delegated)
         svc.calendarList().list(maxResults=1).execute()
-        if HR_CALENDAR_ID != 'primary':
-            svc.calendars().get(calendarId=HR_CALENDAR_ID).execute()
-            return True, f"calendar_list_ok target={HR_CALENDAR_ID}"
-        return True, "calendar_list_ok"
+        resolved = _resolve_calendar_id(svc, force_refresh=True)
+        if HR_CALENDAR_ID == 'primary':
+            return True, "calendar_list_ok"
+        if resolved:
+            return True, f"calendar_ok resolved={resolved} ({_CALENDAR_RESOLVE_DETAIL})"
+        return False, _CALENDAR_RESOLVE_DETAIL or f"calendar_not_found:{HR_CALENDAR_ID}"
     except HttpError as e:
         _log_calendar_http_error("calendarList.list (startup probe)", e)
         return False, f"http_{e.resp.status}_{e._get_reason() if hasattr(e, '_get_reason') else 'error'}"
@@ -597,6 +691,8 @@ async def api_health():
         "credentials_loaded": _GOOGLE_CALENDAR_CREDENTIALS is not None,
         "delegate_email": HR_DELEGATE_EMAIL,
         "calendar_id": HR_CALENDAR_ID,
+        "resolved_calendar_id": _RESOLVED_CALENDAR_ID,
+        "calendar_resolve_detail": _CALENDAR_RESOLVE_DETAIL or None,
     }
     if _GOOGLE_CALENDAR_PROBE_OK is not None:
         cal["reachable"] = _GOOGLE_CALENDAR_PROBE_OK

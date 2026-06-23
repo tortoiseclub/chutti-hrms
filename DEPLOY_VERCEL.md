@@ -85,9 +85,13 @@ Leave and holiday flows create events on **`HR_CALENDAR_ID`** (default: the dele
 | `GOOGLE_CALENDAR_CREDENTIALS_JSON_B64` | **Recommended on Vercel**: base64-encode the entire JSON key file (`base64 -i key.json \| tr -d '\n'`) and paste the string. Avoids broken escaping from multiline JSON. |
 | `GOOGLE_CALENDAR_CREDENTIALS_JSON` | Alternative: single-line JSON (fragile in dashboards). |
 | `HR_CALENDAR_DELEGATE_EMAIL` | A **real Workspace user** (not a Google Group) used only for domain-wide delegation. Example: `ipshita@yourdomain.com`. |
-| `HR_CALENDAR_ID` | Calendar that receives events. For a shared OOO group calendar, set to the group address (e.g. `ooo@yourdomain.com`). Omit or set to `primary` to use the delegate user’s primary calendar. |
+| `HR_CALENDAR_ID` | Calendar that receives events. Use the **full Calendar ID** from Google Calendar → Settings → your OOO calendar → **Integrate calendar** (looks like `abc...@group.calendar.google.com`). The group address (`ooo@…`) is **not** a valid calendar ID — the app will try to match it from the delegate user’s calendar list, but the reliable fix is to paste the full ID. |
 
-**Google Group calendar:** `HR_CALENDAR_DELEGATE_EMAIL` must stay a real user who can manage the group calendar (group manager or admin). Set `HR_CALENDAR_ID` to the group email. In Admin Console → Groups → your OOO group → enable **Calendar** and **Share calendar with group members** so everyone sees events in Google Calendar.
+**Google Group calendar setup:**
+1. Admin Console → Groups → OOO group → enable **Calendar** and share with members.
+2. Log in as the **delegate user** (`HR_CALENDAR_DELEGATE_EMAIL`) in Google Calendar and ensure the OOO group calendar appears in the sidebar (under “Other calendars” or similar).
+3. Open that calendar’s settings → **Integrate calendar** → copy **Calendar ID** → set as `HR_CALENDAR_ID`.
+4. The delegate user needs **Make changes to events** (writer) access on that calendar.
 
 Local dev: put the JSON next to `server.py` as `google_calendar_credentials.json` (gitignored via `*credentials*` patterns).
 
